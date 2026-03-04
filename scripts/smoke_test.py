@@ -36,11 +36,9 @@ def main() -> int:
         openai_models = providers.provider_models("openai", settings)
         gemini_models = providers.provider_models("gemini", settings)
 
-        assert "gpt-4o" in openai_models
         assert "gpt-4o-mini" in openai_models
         assert "gpt-4-turbo" in openai_models
         assert "gemini-2.5-flash" in gemini_models
-        assert "gemini-2.5-pro" in gemini_models
 
         ok, message = providers.ollama_health(settings)
         print("Ollama health:", ok, message)

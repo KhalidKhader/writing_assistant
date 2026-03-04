@@ -89,6 +89,8 @@ class ProviderManager:
                 ["ollama", "pull", model_name],
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=60 * 30,
                 check=False,
             )
@@ -127,7 +129,7 @@ class ProviderManager:
                 return list(dict.fromkeys([current] + OPENAI_MODELS))
             return list(OPENAI_MODELS)
         if provider == "gemini":
-            current = settings.get("gemini", {}).get("model", "gemini-2.5-flash")
+            current = settings.get("gemini", {}).get("model", "gemini-3.1-flash-lite-preview")
             if current in GEMINI_MODELS:
                 return list(dict.fromkeys([current] + GEMINI_MODELS))
             return list(GEMINI_MODELS)
@@ -257,7 +259,19 @@ class ProviderManager:
         try:
             with self._generate_client() as client:
                 with client.stream("POST", f"{endpoint}/api/chat", json=payload) as resp:
+                    if resp.status_code == 404:
+                        resp.read()
+                        err_body = resp.text.lower()
+                        if "model" in err_body and ("not found" in err_body or "pull" in err_body):
+                            raise ProviderError(
+                                f"Model '{model_name}' is not pulled. "
+                                f"Click '⬇ Pull Model' or run: ollama pull {model_name}"
+                            )
+                        logger.warning("Ollama /api/chat (stream) not found; falling back to generate")
+                        return self._ollama_generate_legacy(settings, prompt)
+                    
                     resp.raise_for_status()
+
                     for raw_line in resp.iter_lines():
                         if not raw_line:
                             continue
@@ -271,18 +285,18 @@ class ProviderManager:
                             on_chunk("".join(accumulated))
                         if chunk.get("done"):
                             break
-            return self._clean_output("".join(accumulated))
+            # Ensure we got *something*
+            full_text = "".join(accumulated)
+            if not full_text:
+                logger.warning("Ollama stream returned empty content (model=%s)", model_name)
+            return self._clean_output(full_text)
         except httpx.HTTPStatusError as e:
-            if e.response.status_code == 404:
-                err_body = e.response.text.lower()
-                if "model" in err_body and ("not found" in err_body or "pull" in err_body):
-                    raise ProviderError(
-                        f"Model '{model_name}' is not pulled. "
-                        f"Click '⬇ Pull Model' or run: ollama pull {model_name}"
-                    ) from e
-                logger.warning("Ollama /api/chat (stream) not found; falling back to generate")
-                return self._ollama_generate_legacy(settings, prompt)
-            raise ProviderError(f"Ollama HTTP error: {e.response.status_code} — {e.response.text}") from e
+            try:
+                e.response.read()
+                msg = f"Ollama HTTP error: {e.response.status_code} — {e.response.text}"
+            except Exception:
+                msg = f"Ollama HTTP error: {e.response.status_code}"
+            raise ProviderError(msg) from e
         except httpx.ConnectError as e:
             endpoint_url = settings["ollama"]["endpoint"]
             raise ProviderError(
@@ -359,9 +373,9 @@ class ProviderManager:
         if not api_key:
             raise ProviderError("Gemini API key is missing")
         base_url = settings["gemini"].get("base_url", "https://generativelanguage.googleapis.com/v1beta").rstrip("/")
-        model = settings["gemini"].get("model", "gemini-2.5-flash")
+        model = settings["gemini"].get("model", "gemini-3.1-flash-lite-preview")
         if model not in GEMINI_MODELS:
-            model = "gemini-2.5-flash"
+            model = "gemini-3.1-flash-lite-preview"
         payload = {
             "contents": [{"parts": [{"text": prompt}]}],
             "generationConfig": {"temperature": 0.2},

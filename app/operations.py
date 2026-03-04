@@ -120,9 +120,11 @@ class OperationBuilder:
         raise ValueError(f"Unsupported action: {action}")
 
     def output_mode_for(self, action: str, settings: dict[str, Any]) -> str:
-        return (
-            settings.get("actions", {})
-            .get(action, {})
-            .get("output_mode", settings.get("output_mode", "replace"))
-        )
+        global_mode = settings.get("output_mode", "replace")
+        per_action = settings.get("actions", {}).get(action, {}).get("output_mode", "replace")
+        # Global output mode (the top-level combo) takes priority when set to clipboard.
+        # Per-action modes from the Settings tab are respected only when global is "replace".
+        if global_mode == "clipboard":
+            return "clipboard"
+        return per_action
 

@@ -7,7 +7,7 @@ import webbrowser
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
-from PySide6.QtCore import QPoint, QSize, QTimer, Qt, Signal, Slot
+from PySide6.QtCore import QPoint, QRect, QSize, QTimer, Qt, Signal, Slot
 from PySide6.QtGui import QAction, QColor, QFont, QPainter, QPainterPath
 from PySide6.QtWidgets import (
     QApplication,
@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMainWindow,
     QMenu,
+    QProgressBar,
     QPushButton,
     QScrollArea,
     QSizePolicy,
@@ -374,6 +375,62 @@ QMenu::separator {
 }
 """
 
+# Per-language avatar colors (shown as circular badges on action buttons)
+LANG_COLORS: dict[str, str] = {
+    "AR": "#f38ba8",  # Arabic   – rose
+    "EN": "#89b4fa",  # English  – blue
+    "ES": "#f9e2af",  # Spanish  – yellow
+    "FR": "#74c7ec",  # French   – sky
+    "DE": "#a6e3a1",  # German   – green
+    "HE": "#fab387",  # Hebrew   – peach
+    "IT": "#cba6f7",  # Italian  – lavender
+    "PT": "#94e2d5",  # Portuguese – teal
+    "RU": "#eba0ac",  # Russian  – flamingo
+    "ZH": "#e5c890",  # Chinese  – gold
+    "JA": "#f2cdcd",  # Japanese – rosewater
+    "KO": "#b4befe",  # Korean   – lavender-blue
+    "TR": "#a6d189",  # Turkish  – green2
+    "HI": "#ef9f76",  # Hindi    – orange
+    "NL": "#81c8be",  # Dutch    – teal2
+}
+
+
+class LangButton(QPushButton):
+    """Action button with a small colored circular letter-avatar on the left.
+
+    Renders reliably on every platform without relying on flag emoji support
+    (Windows does not render regional-indicator emoji as actual flags).
+    """
+
+    def __init__(self, code: str, language: str, parent=None) -> None:
+        # Leading spaces to leave room for the painted avatar circle
+        super().__init__(f"   {language}", parent)
+        self._code = code[:2].upper()
+        color_hex = LANG_COLORS.get(self._code, "#cba6f7")
+        self._circle_color = QColor(color_hex)
+        self.setMinimumHeight(36)
+        self.setCursor(Qt.PointingHandCursor)
+
+    def paintEvent(self, event) -> None:  # type: ignore[override]
+        super().paintEvent(event)
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        r = 13
+        cx = 22
+        cy = self.height() // 2
+        # Filled circle
+        painter.setBrush(self._circle_color)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.drawEllipse(cx - r, cy - r, r * 2, r * 2)
+        # Two-letter code inside circle
+        painter.setPen(QColor("#1e1e2e"))
+        f = QFont("Arial", 8)
+        f.setBold(True)
+        painter.setFont(f)
+        painter.drawText(QRect(cx - r, cy - r, r * 2, r * 2), Qt.AlignmentFlag.AlignCenter, self._code)
+        painter.end()
+
+
 LANG_CHIP_ACTIVE = (
     "QPushButton {"
     "  background:#cba6f7; color:#1e1e2e; border-radius:12px; padding:4px 14px;"
@@ -552,7 +609,7 @@ class LanguageChips(QWidget):
 # ─────────────────────────────────────────────────────────────────────────────
 class FloatingBar(QMainWindow):
     notify_signal = Signal(str)
-    apply_output_signal = Signal(str, str)
+    apply_output_signal = Signal(str, str, str)  # output_mode, output, source_app
     # These signals marshal cross-thread calls back to the main thread
     _settings_reload_signal = Signal(object)   # carries a dict snapshot
     _models_refresh_signal = Signal()
@@ -563,6 +620,8 @@ class FloatingBar(QMainWindow):
     # Background health/model list results marshalled back to main thread
     _health_update_signal = Signal(object)   # carries list[str] of issues
     _models_loaded_signal = Signal(object)   # carries tuple(list[str], str, str)
+    # Pull model progress: True=show spinner, False=hide
+    _pull_progress_signal = Signal(bool)
 
     def __init__(self, settings_manager: SettingsManager) -> None:
         super().__init__()
@@ -588,6 +647,7 @@ class FloatingBar(QMainWindow):
         self._stream_preview_signal.connect(self._update_preview_stream)
         self._health_update_signal.connect(self._apply_health_result)
         self._models_loaded_signal.connect(self._apply_models_result)
+        self._pull_progress_signal.connect(self._set_pull_progress)
 
         self.setStyleSheet(APP_STYLESHEET)
         self._build_ui()
@@ -679,9 +739,23 @@ class FloatingBar(QMainWindow):
 
         self.pull_model_button = QPushButton("⬇  Pull Model")
         self.pull_model_button.setObjectName("primary")
-        self.pull_model_button.setToolTip("Pull the selected Ollama model")
+        self.pull_model_button.setToolTip("Pull the selected Ollama model (Ollama only)")
         self.pull_model_button.setCursor(Qt.PointingHandCursor)
         prov_row.addWidget(self.pull_model_button)
+
+        self.pull_progress = QProgressBar()
+        self.pull_progress.setRange(0, 0)  # indeterminate / spinning
+        self.pull_progress.setFixedWidth(120)
+        self.pull_progress.setFixedHeight(18)
+        self.pull_progress.setTextVisible(False)
+        self.pull_progress.setStyleSheet(
+            "QProgressBar { border: 1px solid #45475a; border-radius: 9px;"
+            "  background: #252535; }"
+            "QProgressBar::chunk { background: qlineargradient(x1:0,y1:0,x2:1,y2:0,"
+            "  stop:0 #7287fd, stop:1 #cba6f7); border-radius: 8px; }"
+        )
+        self.pull_progress.setVisible(False)
+        prov_row.addWidget(self.pull_progress)
 
         self.toggle_ring_button = QPushButton("◉  Ring")
         self.toggle_ring_button.setToolTip("Show/hide the floating ring button")
@@ -750,14 +824,12 @@ class FloatingBar(QMainWindow):
         # Built-in language buttons
         builtin_row = QHBoxLayout()
         builtin_row.setSpacing(8)
-        self.ar_button = QPushButton("🇸🇦  Arabic")
-        self.en_button = QPushButton("🇬🇧  English")
-        self.es_button = QPushButton("🇪🇸  Spanish")
-        self.fr_button = QPushButton("🇫🇷  French")
-        self.de_button = QPushButton("🇩🇪  German")
+        self.ar_button = LangButton("AR", "Arabic")
+        self.en_button = LangButton("EN", "English")
+        self.es_button = LangButton("ES", "Spanish")
+        self.fr_button = LangButton("FR", "French")
+        self.de_button = LangButton("DE", "German")
         for b in [self.ar_button, self.en_button, self.es_button, self.fr_button, self.de_button]:
-            b.setMinimumHeight(34)
-            b.setCursor(Qt.PointingHandCursor)
             builtin_row.addWidget(b)
         builtin_row.addStretch()
         lang_vlayout.addLayout(builtin_row)
@@ -1118,14 +1190,14 @@ class FloatingBar(QMainWindow):
         self.mode_combo.currentTextChanged.connect(self.on_mode_changed)
         self.custom_language_combo.currentTextChanged.connect(self.on_custom_language_changed)
 
-        self.fix_button.clicked.connect(lambda: self.run_action("fix"))
-        self.summary_button.clicked.connect(lambda: self.run_action("summarize"))
-        self.ar_button.clicked.connect(lambda: self.run_action("translate_ar"))
-        self.en_button.clicked.connect(lambda: self.run_action("translate_en"))
-        self.es_button.clicked.connect(lambda: self.run_action("translate_es"))
-        self.fr_button.clicked.connect(lambda: self.run_action("translate_fr"))
-        self.de_button.clicked.connect(lambda: self.run_action("translate_de"))
-        self.custom_button.clicked.connect(lambda: self.run_action("translate_custom"))
+        self.fix_button.clicked.connect(lambda: self._run_action_from_button("fix"))
+        self.summary_button.clicked.connect(lambda: self._run_action_from_button("summarize"))
+        self.ar_button.clicked.connect(lambda: self._run_action_from_button("translate_ar"))
+        self.en_button.clicked.connect(lambda: self._run_action_from_button("translate_en"))
+        self.es_button.clicked.connect(lambda: self._run_action_from_button("translate_es"))
+        self.fr_button.clicked.connect(lambda: self._run_action_from_button("translate_fr"))
+        self.de_button.clicked.connect(lambda: self._run_action_from_button("translate_de"))
+        self.custom_button.clicked.connect(lambda: self._run_action_from_button("translate_custom"))
 
         self.settings_button.clicked.connect(self.save_settings_from_ui)
         self.minimize_button.clicked.connect(self.hide_to_tray)
@@ -1216,6 +1288,8 @@ class FloatingBar(QMainWindow):
             finally:
                 self.provider_combo.blockSignals(False)
                 self.mode_combo.blockSignals(False)
+            # Keep pull button in sync with the loaded provider
+            self._update_pull_button_visibility()
             self.fix_prompt.setPlainText(s["actions"]["fix"].get("prompt", ""))
             self.summary_prompt.setPlainText(s["actions"]["summarize"].get("prompt", ""))
             self.translate_prompt.setPlainText(s["actions"]["translate_custom"].get("prompt", ""))
@@ -1345,6 +1419,8 @@ class FloatingBar(QMainWindow):
         try:
             # `provider` is the combo display text; read the internal data value.
             internal = self.provider_combo.currentData() or provider
+            # Update Pull Model button visibility immediately on provider change
+            self._update_pull_button_visibility()
             # Saving triggers _apply_settings_change (synchronous direct-signal
             # on the main thread) which already schedules refresh_models() via
             # QTimer.singleShot.  Calling refresh_models() here too would cause
@@ -1443,6 +1519,9 @@ class FloatingBar(QMainWindow):
                 self._notify("No model selected")
                 return
             self.status_label.setText(f"⟳  Pulling {model}…")
+            self._restyle_label(self.status_label, "status_warn")
+            self.pull_model_button.setEnabled(False)
+            self._pull_progress_signal.emit(True)
             self.executor.submit(self._pull_model_sync, model)
         except Exception:
             logger.exception("Failed to schedule model pull")
@@ -1459,6 +1538,29 @@ class FloatingBar(QMainWindow):
         except Exception:
             logger.exception("Model pull failed")
             self._notify("Model pull failed")
+        finally:
+            self._pull_progress_signal.emit(False)
+
+    @Slot(bool)
+    def _set_pull_progress(self, visible: bool) -> None:
+        """Show/hide the pull progress bar and re-enable the pull button."""
+        try:
+            self.pull_progress.setVisible(visible)
+            self.pull_model_button.setEnabled(not visible)
+        except Exception:
+            logger.exception("Failed updating pull progress")
+
+    def _update_pull_button_visibility(self) -> None:
+        """Show the Pull Model button only for Ollama; hide it for OpenAI / Gemini."""
+        try:
+            provider = self.provider_combo.currentData() or self.provider_combo.currentText()
+            is_ollama = str(provider).lower() == "ollama"
+            self.pull_model_button.setVisible(is_ollama)
+            if not is_ollama:
+                # Hide progress bar too if switching away from Ollama mid-pull
+                self.pull_progress.setVisible(False)
+        except Exception:
+            logger.exception("Failed updating pull button visibility")
 
     def _restyle_label(self, label, name: str) -> None:
         """Change a QLabel's objectName and force QSS re-evaluation."""
@@ -1552,6 +1654,20 @@ class FloatingBar(QMainWindow):
 
     # ── Action execution ─────────────────────────────────────────────────────
 
+    def _run_action_from_button(self, action: str) -> None:
+        """Wrapper for button-click connections.
+
+        Snapshots the source window *on the main thread right now* — before the
+        background executor thread picks up the work — so that focus management
+        (Ctrl+C / Ctrl+V targeting) has the correct window handle even though
+        the Writing Assistant window has already stolen focus.
+        """
+        try:
+            source_app = self.selection.snapshot_source_app()
+            self.run_action(action, source_app=source_app)
+        except Exception:
+            logger.exception("_run_action_from_button failed")
+
     def run_action(self, action: str, source_app: str = "") -> None:
         try:
             self.status_label.setText(f"⟳  Running {action}…")
@@ -1582,7 +1698,7 @@ class FloatingBar(QMainWindow):
 
             output_mode = self.ops.output_mode_for(action, settings)
             # Emit final cleaned text so _apply_output can replace/copy as needed
-            self.apply_output_signal.emit(output_mode, output)
+            self.apply_output_signal.emit(output_mode, output, source_app)
 
         except ProviderError as exc:
             logger.error("Provider error: %s", exc)
@@ -1605,8 +1721,8 @@ class FloatingBar(QMainWindow):
         except Exception:
             logger.exception("Failed updating streaming preview")
 
-    @Slot(str, str)
-    def _apply_output(self, output_mode: str, output: str) -> None:
+    @Slot(str, str, str)
+    def _apply_output(self, output_mode: str, output: str, source_app: str) -> None:
         try:
             # Always persist the final cleaned output in the preview
             self.output_preview.setPlainText(output)
@@ -1614,7 +1730,7 @@ class FloatingBar(QMainWindow):
                 self.selection.copy_to_clipboard(output)
                 self._show_notification("✔  Output copied to clipboard")
             elif output_mode == "replace":
-                self.selection.replace_selected_text(output)
+                self.selection.replace_selected_text(output, source_app=source_app)
                 self._show_notification("✔  Selection replaced")
             # "preview_only" — streaming intermediate; no clipboard/replace action needed
         except Exception:
@@ -1719,6 +1835,11 @@ def run() -> int:
             _signal.signal(_signal.SIGTRAP, _signal.SIG_IGN)
         except (OSError, ValueError):
             pass  # may fail in certain environments; non-fatal
+
+    # Fix "QFont::setPointSize: Point size <= 0 (-1)" warnings on Windows/Linux
+    # where no physical display DPI is available at font-metrics time.
+    if sys.platform in ("win32", "linux"):
+        os.environ.setdefault("QT_FONT_DPI", "96")
 
     app = QApplication(sys.argv)
     app.setApplicationName("Writing Assistant")

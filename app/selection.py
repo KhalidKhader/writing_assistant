@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import ctypes
 import logging
+import os
 import subprocess
 import sys
 import threading
@@ -22,6 +24,53 @@ logger = logging.getLogger(__name__)
 # when tracking the "last external app that had focus").
 _WA_KEYWORDS = {"python", "python3", "writing assistant", "writing_assistant"}
 
+# ── Windows Win32 helpers ──────────────────────────────────────────────────
+
+if sys.platform == "win32":
+    _user32 = ctypes.windll.user32  # type: ignore[attr-defined]
+else:
+    _user32 = None
+
+
+def _win_get_foreground_hwnd() -> int:
+    """Return the current foreground window handle on Windows, or 0."""
+    if _user32 is None:
+        return 0
+    try:
+        return _user32.GetForegroundWindow()
+    except Exception:
+        return 0
+
+
+def _win_hwnd_is_wa(hwnd: int) -> bool:
+    """Return True if *hwnd* belongs to this process (the Writing Assistant)."""
+    if not hwnd or _user32 is None:
+        return False
+    try:
+        pid = ctypes.c_ulong(0)
+        _user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+        return pid.value == os.getpid()
+    except Exception:
+        return False
+
+
+def _win_activate_hwnd(hwnd: int) -> None:
+    """Bring a Windows window to the foreground and wait for the OS to
+    process the focus transfer (≈350 ms)."""
+    if not hwnd or _user32 is None:
+        return
+    try:
+        # AllowSetForegroundWindow is needed in some OS configurations
+        _user32.AllowSetForegroundWindow(0xFFFFFFFF)
+        # ShowWindow(hwnd, SW_RESTORE=9) un-minimises if needed
+        _user32.ShowWindow(hwnd, 9)
+        _user32.SetForegroundWindow(hwnd)
+        time.sleep(0.35)  # let Windows finish the focus transfer
+    except Exception:
+        pass
+
+
+# ── macOS helpers ──────────────────────────────────────────────────────────
 
 def _get_frontmost_app() -> str:
     """Return the name of the current frontmost macOS process, or '' on other OSes."""
@@ -36,6 +85,8 @@ def _get_frontmost_app() -> str:
             ],
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=2,
         )
         return result.stdout.strip()
@@ -60,7 +111,7 @@ def _activate_app(app_name: str) -> None:
 
 
 class SelectionService:
-    """Combines clipboard-based text capture and replacement with macOS focus
+    """Combines clipboard-based text capture and replacement with platform focus
     management so that button-triggered actions work reliably (not only hotkeys)."""
 
     def __init__(self) -> None:
@@ -70,16 +121,20 @@ class SelectionService:
             self.modifier_key = Key.cmd if shortcut_modifier() == "cmd" else Key.ctrl
 
         self._lock = threading.Lock()
-        self._last_external_app: str = ""
+        self._last_external_app: str = ""   # macOS: app name
+        self._last_external_hwnd: int = 0   # Windows: window handle
 
-        # On macOS start a lightweight background thread that remembers the most
-        # recent non-WA app that had focus.  This lets us switch back to it
-        # before copy/paste even after the WA window has stolen focus.
+        # macOS: background thread polls the frontmost app name
         if sys.platform == "darwin":
             t = threading.Thread(target=self._poll_frontmost_app, daemon=True)
             t.start()
 
-    # ── Background app tracker ────────────────────────────────────────────
+        # Windows: background thread polls the foreground window handle
+        if sys.platform == "win32":
+            t = threading.Thread(target=self._poll_foreground_hwnd, daemon=True)
+            t.start()
+
+    # ── Background app tracker (macOS) ───────────────────────────────────
 
     def _poll_frontmost_app(self) -> None:
         while True:
@@ -92,18 +147,62 @@ class SelectionService:
             except Exception:
                 pass
 
+    # ── Background window tracker (Windows) ─────────────────────────────
+
+    def _poll_foreground_hwnd(self) -> None:
+        while True:
+            time.sleep(0.3)
+            try:
+                hwnd = _win_get_foreground_hwnd()
+                if hwnd and not _win_hwnd_is_wa(hwnd):
+                    with self._lock:
+                        self._last_external_hwnd = hwnd
+            except Exception:
+                pass
+
     def _source_app(self) -> str:
         with self._lock:
             return self._last_external_app
 
-    def snapshot_source_app(self) -> str:
-        """Capture and return the current source app name.
+    def _source_hwnd(self) -> int:
+        with self._lock:
+            return self._last_external_hwnd
 
-        Call this on the main thread at hotkey-trigger time so the app is
-        locked in *before* the executor thread picks up the request and the
-        background polling thread can overwrite ``_last_external_app``.
+    def snapshot_source_app(self) -> str:
+        """Capture and return the current source app name (macOS) or encode the
+        Windows HWND as a string so it can be passed through the existing
+        source_app: str parameter.
+
+        Call this on the main thread at hotkey/button-trigger time so the
+        handle is locked in *before* the executor thread picks up the request.
         """
+        if sys.platform == "win32":
+            hwnd = _win_get_foreground_hwnd()
+            if hwnd and not _win_hwnd_is_wa(hwnd):
+                with self._lock:
+                    self._last_external_hwnd = hwnd
+            return f"__hwnd__:{self._source_hwnd()}"
         return self._source_app()
+
+    # ── Internal focus-restore helpers ───────────────────────────────────
+
+    def _restore_focus(self, source_app: str) -> None:
+        """Re-activate the source window/app before sending keyboard input."""
+        if sys.platform == "darwin":
+            src = source_app or self._source_app()
+            if src:
+                _activate_app(src)
+        elif sys.platform == "win32":
+            hwnd = 0
+            if source_app and source_app.startswith("__hwnd__:"):
+                try:
+                    hwnd = int(source_app.split(":", 1)[1])
+                except ValueError:
+                    pass
+            if not hwnd:
+                hwnd = self._source_hwnd()
+            if hwnd:
+                _win_activate_hwnd(hwnd)
 
     # ── Public API ────────────────────────────────────────────────────────
 
@@ -111,10 +210,7 @@ class SelectionService:
         try:
             if self.controller is None or self.modifier_key is None:
                 return ""
-            # Prefer the caller-supplied hint; fall back to the polled value.
-            src = source_app or self._source_app()
-            if sys.platform == "darwin" and src:
-                _activate_app(src)
+            self._restore_focus(source_app)
             with self.controller.pressed(self.modifier_key):
                 self.controller.tap("c")
             time.sleep(0.25)  # give OS time to update clipboard
@@ -127,9 +223,7 @@ class SelectionService:
         try:
             if self.controller is None or self.modifier_key is None:
                 return
-            src = source_app or self._source_app()
-            if sys.platform == "darwin" and src:
-                _activate_app(src)
+            self._restore_focus(source_app)
             pyperclip.copy(value)
             time.sleep(0.15)
             with self.controller.pressed(self.modifier_key):

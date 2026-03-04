@@ -6,4 +6,4 @@ build/
 dist/
 *.spec
 .DS_Store
-.venv-test.venv-test/
+.venv-test/

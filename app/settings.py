@@ -47,7 +47,7 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     },
     "gemini": {
         "api_key": "",
-        "model": "gemini-2.5-flash",
+        "model": "gemini-3.1-flash-lite-preview",
         "base_url": "https://generativelanguage.googleapis.com/v1beta",
     },
     "shortcuts": _default_shortcuts(),
@@ -58,6 +58,7 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         "English",
         "French",
         "German",
+        "Hebrew",
         "Hindi",
         "Italian",
         "Japanese",
