@@ -1,0 +1,94 @@
+{
+  "provider": "ollama",
+  "output_mode": "replace",
+  "logging": {
+    "level": "INFO",
+    "path": "~/.writing_assistant/logs/app.log"
+  },
+  "polling": {
+    "settings_reload_seconds": 2,
+    "ollama_health_seconds": 5
+  },
+  "ollama": {
+    "endpoint": "http://localhost:11434",
+    "model": "mistral:7b-instruct-v0.2-q4_K_S",
+    "keep_alive": "5m",
+    "suggested_models": [
+      "mistral:7b-instruct-v0.2-q4_K_S",
+      "llama3.1:8b",
+      "qwen2.5:7b",
+      "gemma3:4b"
+    ]
+  },
+  "openai": {
+    "api_key": "",
+    "base_url": "https://api.openai.com/v1",
+    "model": "gpt-4o-mini"
+  },
+  "gemini": {
+    "api_key": "",
+    "base_url": "https://generativelanguage.googleapis.com/v1beta",
+    "model": "gemini-2.5-flash"
+  },
+  "custom_languages": [
+    "Arabic",
+    "Chinese (Simplified)",
+    "Dutch",
+    "English",
+    "French",
+    "German",
+    "Hindi",
+    "Italian",
+    "Japanese",
+    "Korean",
+    "Portuguese",
+    "Russian",
+    "Spanish",
+    "Turkish"
+  ],
+  "selected_custom_language": "Italian",
+  "shortcuts": {
+    "fix": "<cmd>+<alt>+f",
+    "summarize": "<cmd>+<alt>+s",
+    "translate_ar": "<cmd>+<alt>+1",
+    "translate_en": "<cmd>+<alt>+2",
+    "translate_es": "<cmd>+<alt>+3",
+    "translate_fr": "<cmd>+<alt>+4",
+    "translate_de": "<cmd>+<alt>+5",
+    "translate_custom": "<cmd>+<alt>+6"
+  },
+  "actions": {
+    "fix": {
+      "output_mode": "replace",
+      "prompt": "Correct grammar, spelling, punctuation, and capitalization while preserving meaning, tone, paragraph/line structure, bullet formatting, and all proper nouns/URLs/code blocks. Do not add explanations; return only the corrected text."
+    },
+    "summarize": {
+      "output_mode": "replace",
+      "prompt": "Summarize into concise bullets covering key facts, decisions, risks, dates, owners, and action items. Keep original language unless asked otherwise, avoid speculation, and return only the summary."
+    },
+    "translate_ar": {
+      "output_mode": "replace",
+      "prompt": "Translate accurately and naturally, preserving meaning, tone, line breaks, list numbering, and formatting. Keep names, brand terms, URLs, emails, numbers, and code unchanged unless context requires."
+    },
+    "translate_en": {
+      "output_mode": "replace",
+      "prompt": "Translate accurately and naturally, preserving meaning, tone, line breaks, list numbering, and formatting. Keep names, brand terms, URLs, emails, numbers, and code unchanged unless context requires."
+    },
+    "translate_es": {
+      "output_mode": "replace",
+      "prompt": "Translate accurately and naturally, preserving meaning, tone, line breaks, list numbering, and formatting. Keep names, brand terms, URLs, emails, numbers, and code unchanged unless context requires."
+    },
+    "translate_fr": {
+      "output_mode": "replace",
+      "prompt": "Translate accurately and naturally, preserving meaning, tone, line breaks, list numbering, and formatting. Keep names, brand terms, URLs, emails, numbers, and code unchanged unless context requires."
+    },
+    "translate_de": {
+      "output_mode": "replace",
+      "prompt": "Translate accurately and naturally, preserving meaning, tone, line breaks, list numbering, and formatting. Keep names, brand terms, URLs, emails, numbers, and code unchanged unless context requires."
+    },
+    "translate_custom": {
+      "output_mode": "replace",
+      "prompt": "Translate accurately and naturally, preserving meaning, tone, line breaks, list numbering, and formatting. Keep names, brand terms, URLs, emails, numbers, and code unchanged unless context requires."
+    }
+  }
+}
