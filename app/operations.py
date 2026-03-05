@@ -72,6 +72,25 @@ Return format:
 - No explanations, no surrounding quotes."""
 )
 
+CUSTOM_PROMPT = Template(
+    """You are an expert writing assistant. Execute the user's instruction on the provided text precisely.
+
+Instruction: $instruction
+
+Rules:
+- Execute the instruction faithfully and completely.
+- Preserve paragraph breaks, bullet lists, numbering, code blocks, and line structure unless the instruction explicitly calls for restructuring.
+- Do NOT add explanations, commentary, labels, preambles, or surrounding quotes.
+- Return ONLY the result of applying the instruction to the text.
+
+Text:
+$text
+
+Return format:
+- Return ONLY the transformed text.
+- No preamble, no trailing explanation, no surrounding quotes."""
+)
+
 TRANSLATION_LANGUAGES = {
     "translate_ar": "Arabic",
     "translate_en": "English",
@@ -83,7 +102,13 @@ TRANSLATION_LANGUAGES = {
 
 @dataclass
 class OperationBuilder:
-    def build_prompt(self, action: str, text: str, settings: dict[str, Any]) -> str:
+    def build_prompt(
+        self,
+        action: str,
+        text: str,
+        settings: dict[str, Any],
+        custom_instruction: str = "",
+    ) -> str:
         if action == "fix":
             instruction = settings.get("actions", {}).get("fix", {}).get(
                 "prompt",
@@ -116,6 +141,14 @@ class OperationBuilder:
             return TRANSLATE_PROMPT.substitute(
                 language=language, instruction=instruction, text=text
             )
+
+        if action == "custom":
+            instruction = (
+                custom_instruction.strip()
+                or settings.get("actions", {}).get("custom", {}).get("prompt", "")
+                or "Polish and improve this text."
+            )
+            return CUSTOM_PROMPT.substitute(instruction=instruction, text=text)
 
         raise ValueError(f"Unsupported action: {action}")
 

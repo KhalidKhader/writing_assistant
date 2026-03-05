@@ -21,6 +21,7 @@ def _default_shortcuts() -> dict[str, str]:
         "translate_es": f"{modifier}+<alt>+3",
         "translate_fr": f"{modifier}+<alt>+4",
         "translate_de": f"{modifier}+<alt>+5",
+        "custom": f"{modifier}+<alt>+c",
     }
 
 
@@ -126,6 +127,10 @@ DEFAULT_SETTINGS: dict[str, Any] = {
                 "Translate accurately and naturally, preserving meaning, tone, line breaks, list numbering, and "
                 "formatting. Keep names, brand terms, URLs, emails, numbers, and code unchanged unless context requires."
             ),
+        },
+        "custom": {
+            "output_mode": "replace",
+            "prompt": "",
         },
     },
 }

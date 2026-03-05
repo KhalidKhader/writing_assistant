@@ -8,7 +8,7 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 from PySide6.QtCore import QPoint, QRect, QSize, QTimer, Qt, Signal, Slot
-from PySide6.QtGui import QAction, QColor, QFont, QPainter, QPainterPath
+from PySide6.QtGui import QAction, QColor, QFont, QIcon, QPainter, QPainterPath, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
@@ -375,60 +375,154 @@ QMenu::separator {
 }
 """
 
-# Per-language avatar colors (shown as circular badges on action buttons)
-LANG_COLORS: dict[str, str] = {
-    "AR": "#f38ba8",  # Arabic   – rose
-    "EN": "#89b4fa",  # English  – blue
-    "ES": "#f9e2af",  # Spanish  – yellow
-    "FR": "#74c7ec",  # French   – sky
-    "DE": "#a6e3a1",  # German   – green
-    "HE": "#fab387",  # Hebrew   – peach
-    "IT": "#cba6f7",  # Italian  – lavender
-    "PT": "#94e2d5",  # Portuguese – teal
-    "RU": "#eba0ac",  # Russian  – flamingo
-    "ZH": "#e5c890",  # Chinese  – gold
-    "JA": "#f2cdcd",  # Japanese – rosewater
-    "KO": "#b4befe",  # Korean   – lavender-blue
-    "TR": "#a6d189",  # Turkish  – green2
-    "HI": "#ef9f76",  # Hindi    – orange
-    "NL": "#81c8be",  # Dutch    – teal2
+# ─────────────────────────────────────────────────────────────────────────────
+# National flag pixmap generator
+# Draws simplified flag stripe patterns using Qt — works on every platform
+# without any font or emoji dependencies.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Each entry: (direction, list_of_colors)
+# "H" = horizontal stripes top→bottom, "V" = vertical stripes left→right
+# "S" = special (handled individually in the function)
+_FLAG_DATA: dict[str, tuple[str, list[str]]] = {
+    "AR": ("S", ["#006C35", "#FFFFFF", "#006C35"]),             # Saudi Arabia (KSA) – solid green + white sword strip
+    "EN": ("S", ["#012169", "#FFFFFF", "#CC0001"]),   # United Kingdom – Union Jack (blue + white/red cross)
+    "ES": ("H", ["#AA151B", "#F1BF00", "#AA151B"]),   # Spain (red-yellow-red)
+    "FR": ("V", ["#002395", "#FFFFFF", "#ED2939"]),   # France (blue-white-red)
+    "DE": ("H", ["#000000", "#DD0000", "#FFCE00"]),   # Germany (black-red-gold)
+    "HE": ("H", ["#002EAC", "#FFFFFF", "#002EAC"]),   # Israel (blue-white-blue)
+    "IT": ("V", ["#009246", "#FFFFFF", "#CE2B37"]),   # Italy (green-white-red)
+    "PT": ("V", ["#006600", "#DD1111", "#DD1111"]),   # Portugal (simplified green-red)
+    "RU": ("H", ["#FFFFFF", "#0033A0", "#DA010D"]),   # Russia (white-blue-red)
+    "ZH": ("S", ["#DE2910", "#FFDE00"]),              # China (red + gold star)
+    "JA": ("S", ["#FFFFFF", "#BC002D"]),              # Japan (white + red sun)
+    "KO": ("H", ["#FFFFFF", "#FFFFFF", "#FFFFFF"]),   # South Korea (white simplified)
+    "TR": ("S", ["#E30A17", "#FFFFFF"]),              # Turkey (red + white crescent)
+    "HI": ("H", ["#FF9933", "#FFFFFF", "#138808"]),   # India (saffron-white-green)
+    "NL": ("H", ["#AE1C28", "#FFFFFF", "#21468B"]),   # Netherlands (red-white-blue)
+}
+
+
+def _make_flag_pixmap(code: str, w: int = 36, h: int = 22) -> QPixmap:
+    """Return a QPixmap with a simplified national flag for the given language code."""
+    pix = QPixmap(w, h)
+    pix.fill(QColor("transparent"))
+    p = QPainter(pix)
+    p.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+    # Clip to a rounded rectangle so the flag has soft corners
+    clip = QPainterPath()
+    clip.addRoundedRect(0, 0, w, h, 3, 3)
+    p.setClipPath(clip)
+
+    direction, colors = _FLAG_DATA.get(code, ("H", ["#585b70", "#45475a", "#585b70"]))
+    n = len(colors)
+
+    if direction == "H":
+        stripe_h = h / n
+        for i, color in enumerate(colors):
+            y = int(i * stripe_h)
+            sh = h - y if i == n - 1 else int(stripe_h)
+            p.fillRect(QRect(0, y, w, sh), QColor(color))
+
+    elif direction == "V":
+        stripe_w = w / n
+        for i, color in enumerate(colors):
+            x = int(i * stripe_w)
+            sw = w - x if i == n - 1 else int(stripe_w)
+            p.fillRect(QRect(x, 0, sw, h), QColor(color))
+
+    elif direction == "S":
+        if code == "ZH":
+            # Red background + small gold star
+            p.fillRect(QRect(0, 0, w, h), QColor(colors[0]))
+            p.setBrush(QColor(colors[1]))
+            p.setPen(Qt.PenStyle.NoPen)
+            star_r = min(w, h) // 5
+            cx, cy = w // 4, h // 2
+            p.drawEllipse(cx - star_r, cy - star_r, star_r * 2, star_r * 2)
+
+        elif code == "JA":
+            # White background + red circle in centre
+            p.fillRect(QRect(0, 0, w, h), QColor(colors[0]))
+            p.setBrush(QColor(colors[1]))
+            p.setPen(Qt.PenStyle.NoPen)
+            r = min(w, h) // 3
+            p.drawEllipse(w // 2 - r, h // 2 - r, r * 2, r * 2)
+
+        elif code == "TR":
+            # Red background + white crescent (two offset circles)
+            p.fillRect(QRect(0, 0, w, h), QColor(colors[0]))
+            white = QColor(colors[1])
+            p.setBrush(white)
+            p.setPen(Qt.PenStyle.NoPen)
+            r = min(w, h) // 3
+            cx, cy = w // 2 - 2, h // 2
+            p.drawEllipse(cx - r, cy - r, r * 2, r * 2)
+            # Cut the crescent by drawing a slightly offset red circle
+            p.setBrush(QColor(colors[0]))
+            p.drawEllipse(cx - r + 4, cy - r + 1, r * 2 - 2, r * 2 - 2)
+
+        elif code == "AR":
+            # Saudi Arabia (KSA): solid green background + white horizontal strip (sword/script)
+            p.fillRect(QRect(0, 0, w, h), QColor(colors[0]))
+            strip_h = max(2, h // 7)
+            strip_y = h * 3 // 5
+            p.fillRect(QRect(3, strip_y, w - 6, strip_h), QColor(colors[1]))
+
+        elif code == "EN":
+            # UK Union Jack: dark blue + thick white cross + thinner red cross
+            p.fillRect(QRect(0, 0, w, h), QColor(colors[0]))
+            p.setPen(Qt.PenStyle.NoPen)
+            cw = max(3, h // 4)   # white cross arm half-width
+            rt = max(1, cw // 2)  # red cross arm half-width
+            # White horizontal + vertical bars
+            p.fillRect(QRect(0, h // 2 - cw, w, cw * 2), QColor(colors[1]))
+            p.fillRect(QRect(w // 2 - cw, 0, cw * 2, h), QColor(colors[1]))
+            # Red horizontal + vertical bars (thinner, centred)
+            p.fillRect(QRect(0, h // 2 - rt, w, rt * 2), QColor(colors[2]))
+            p.fillRect(QRect(w // 2 - rt, 0, rt * 2, h), QColor(colors[2]))
+
+    p.setClipping(False)
+    # Draw a subtle border so the flag stands out on any background
+    p.setPen(QColor("#45475a"))
+    p.setBrush(Qt.BrushStyle.NoBrush)
+    p.drawRoundedRect(0, 0, w - 1, h - 1, 3, 3)
+    p.end()
+    return pix
+
+
+# Maps language display names to their two-letter flag code in _FLAG_DATA.
+LANGUAGE_FLAGS: dict[str, str] = {
+    "Arabic": "AR",
+    "Chinese (Simplified)": "ZH",
+    "Dutch": "NL",
+    "English": "EN",
+    "French": "FR",
+    "German": "DE",
+    "Hebrew": "HE",
+    "Hindi": "HI",
+    "Italian": "IT",
+    "Japanese": "JA",
+    "Korean": "KO",
+    "Portuguese": "PT",
+    "Russian": "RU",
+    "Spanish": "ES",
+    "Turkish": "TR",
 }
 
 
 class LangButton(QPushButton):
-    """Action button with a small colored circular letter-avatar on the left.
-
-    Renders reliably on every platform without relying on flag emoji support
-    (Windows does not render regional-indicator emoji as actual flags).
-    """
+    """Action button with a small national flag icon on the left."""
 
     def __init__(self, code: str, language: str, parent=None) -> None:
-        # Leading spaces to leave room for the painted avatar circle
-        super().__init__(f"   {language}", parent)
+        super().__init__(f"  {language}", parent)
         self._code = code[:2].upper()
-        color_hex = LANG_COLORS.get(self._code, "#cba6f7")
-        self._circle_color = QColor(color_hex)
+        pix = _make_flag_pixmap(self._code)
+        self.setIcon(QIcon(pix))
+        self.setIconSize(QSize(36, 22))
         self.setMinimumHeight(36)
         self.setCursor(Qt.PointingHandCursor)
-
-    def paintEvent(self, event) -> None:  # type: ignore[override]
-        super().paintEvent(event)
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        r = 13
-        cx = 22
-        cy = self.height() // 2
-        # Filled circle
-        painter.setBrush(self._circle_color)
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.drawEllipse(cx - r, cy - r, r * 2, r * 2)
-        # Two-letter code inside circle
-        painter.setPen(QColor("#1e1e2e"))
-        f = QFont("Arial", 8)
-        f.setBold(True)
-        painter.setFont(f)
-        painter.drawText(QRect(cx - r, cy - r, r * 2, r * 2), Qt.AlignmentFlag.AlignCenter, self._code)
-        painter.end()
 
 
 LANG_CHIP_ACTIVE = (
@@ -807,13 +901,22 @@ class FloatingBar(QMainWindow):
         self.summary_button.setToolTip("Summarize the selected text")
         self.summary_button.setCursor(Qt.PointingHandCursor)
 
+        self.custom_command_button = QPushButton("✨  Custom Command")
+        self.custom_command_button.setObjectName("primary")
+        self.custom_command_button.setCursor(Qt.PointingHandCursor)
+        self.custom_command_button.setToolTip(
+            "Apply your saved custom prompt to the selected text.\n"
+            "Edit the prompt in the Prompts tab."
+        )
+
         self.settings_button = QPushButton("💾  Save Settings")
         self.settings_button.setObjectName("primary")
         self.settings_button.setCursor(Qt.PointingHandCursor)
 
         btn_layout.addWidget(self.fix_button, 0, 0)
         btn_layout.addWidget(self.summary_button, 0, 1)
-        btn_layout.addWidget(self.settings_button, 0, 2)
+        btn_layout.addWidget(self.custom_command_button, 0, 2)
+        btn_layout.addWidget(self.settings_button, 0, 3)
         layout.addWidget(btn_group)
 
         # Language section
@@ -889,14 +992,17 @@ class FloatingBar(QMainWindow):
     # ── Prompts tab ──────────────────────────────────────────────────────────
 
     def _build_prompts_tab(self) -> QWidget:
-        page = QWidget()
-        layout = QVBoxLayout(page)
-        layout.setContentsMargins(12, 12, 12, 12)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        inner = QWidget()
+        scroll.setWidget(inner)
+        layout = QVBoxLayout(inner)
+        layout.setContentsMargins(16, 16, 16, 16)
         layout.setSpacing(14)
 
         hint = QLabel(
             "Customize the instruction given to the AI for each operation.  "
-            "Changes are applied when you click <b>Save Settings</b>.  "
+            "Changes are applied when you click <b>Save Prompts</b>.  "
             "Use explicit constraints (tone, formatting, output shape) for better results."
         )
         hint.setWordWrap(True)
@@ -909,19 +1015,19 @@ class FloatingBar(QMainWindow):
         form.setSpacing(12)
 
         self.fix_prompt = QTextEdit()
-        self.fix_prompt.setMinimumHeight(88)
+        self.fix_prompt.setMinimumHeight(120)
         self.fix_prompt.setPlaceholderText(
             "E.g. Correct grammar and punctuation while preserving tone, structure, lists, and line breaks. Return only corrected text."
         )
 
         self.summary_prompt = QTextEdit()
-        self.summary_prompt.setMinimumHeight(88)
+        self.summary_prompt.setMinimumHeight(120)
         self.summary_prompt.setPlaceholderText(
             "E.g. Summarize in concise bullets with key facts, decisions, risks, dates, and action items."
         )
 
         self.translate_prompt = QTextEdit()
-        self.translate_prompt.setMinimumHeight(88)
+        self.translate_prompt.setMinimumHeight(120)
         self.translate_prompt.setPlaceholderText(
             "E.g. Translate naturally while preserving formatting, terminology, proper names, URLs, numbers, and code blocks."
         )
@@ -931,6 +1037,42 @@ class FloatingBar(QMainWindow):
         form.addRow("🌐  Translate prompt", self.translate_prompt)
         layout.addLayout(form)
 
+        # ── Custom Command prompt ────────────────────────────────────────────
+        custom_section_lbl = QLabel("✨  Custom Command")
+        custom_section_lbl.setObjectName("section")
+        layout.addWidget(custom_section_lbl)
+
+        preset_hint = QLabel("Quick presets — click to load into the prompt:")
+        preset_hint.setStyleSheet("color:#a6adc8; font-size:12px;")
+        layout.addWidget(preset_hint)
+
+        preset_row_p = QHBoxLayout()
+        preset_row_p.setSpacing(6)
+        _presets = [
+            ("✂ Shorter",      "Make this shorter and more concise without losing key information."),
+            ("🎩 Professional", "Rewrite this in a formal, professional tone."),
+            ("•  Bullets",      "Convert this into a clear, concise bullet-point list."),
+            ("💡 Explain",      "Explain this in simple terms a non-expert can understand."),
+            ("📧 Email",        "Rewrite this as a polished, professional email reply."),
+            ("🔥 Improve",      "Improve the clarity, flow, and impact of this writing without changing the meaning."),
+        ]
+        for _label, _text in _presets:
+            _btn = QPushButton(_label)
+            _btn.setStyleSheet(LANG_CHIP_INACTIVE)
+            _btn.setCursor(Qt.PointingHandCursor)
+            _btn.clicked.connect(lambda _c, t=_text: self.custom_command_input.setPlainText(t))
+            preset_row_p.addWidget(_btn)
+        preset_row_p.addStretch()
+        layout.addLayout(preset_row_p)
+
+        self.custom_command_input = QTextEdit()
+        self.custom_command_input.setMinimumHeight(100)
+        self.custom_command_input.setPlaceholderText(
+            "Type any instruction… e.g. 'Rewrite professionally', 'Translate to Italian', "
+            "'Summarize in 3 bullets', 'Explain like I'm 5'…"
+        )
+        layout.addWidget(self.custom_command_input)
+
         save_btn = QPushButton("💾  Save Prompts")
         save_btn.setObjectName("primary")
         save_btn.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
@@ -939,7 +1081,7 @@ class FloatingBar(QMainWindow):
         layout.addWidget(save_btn, alignment=Qt.AlignRight)
         layout.addStretch()
 
-        return page
+        return scroll
 
     # ── Settings tab ─────────────────────────────────────────────────────────
 
@@ -1006,7 +1148,8 @@ class FloatingBar(QMainWindow):
             "translate_es": "🇪🇸  Spanish",
             "translate_fr": "🇫🇷  French",
             "translate_de": "🇩🇪  German",
-            "translate_custom": "🌍  Custom",
+            "translate_custom": "🌍  Custom translate",
+            "custom": "✨  Custom command",
         }
         for action, label in action_labels.items():
             cb = QComboBox()
@@ -1083,6 +1226,10 @@ class FloatingBar(QMainWindow):
         fix_action.triggered.connect(lambda: self.run_action("fix"))
         summarize_action = QAction("Summarize selection", self)
         summarize_action.triggered.connect(lambda: self.run_action("summarize"))
+        custom_action = QAction("Run custom command", self)
+        custom_action.triggered.connect(
+            lambda: self._run_action_from_button("custom")
+        )
         quit_action = QAction("Quit", self)
         quit_action.triggered.connect(QApplication.instance().quit)
 
@@ -1091,6 +1238,7 @@ class FloatingBar(QMainWindow):
         menu.addSeparator()
         menu.addAction(fix_action)
         menu.addAction(summarize_action)
+        menu.addAction(custom_action)
         menu.addSeparator()
         menu.addAction(quit_action)
 
@@ -1198,6 +1346,9 @@ class FloatingBar(QMainWindow):
         self.fr_button.clicked.connect(lambda: self._run_action_from_button("translate_fr"))
         self.de_button.clicked.connect(lambda: self._run_action_from_button("translate_de"))
         self.custom_button.clicked.connect(lambda: self._run_action_from_button("translate_custom"))
+        self.custom_command_button.clicked.connect(
+            lambda: self._run_action_from_button("custom")
+        )
 
         self.settings_button.clicked.connect(self.save_settings_from_ui)
         self.minimize_button.clicked.connect(self.hide_to_tray)
@@ -1293,6 +1444,7 @@ class FloatingBar(QMainWindow):
             self.fix_prompt.setPlainText(s["actions"]["fix"].get("prompt", ""))
             self.summary_prompt.setPlainText(s["actions"]["summarize"].get("prompt", ""))
             self.translate_prompt.setPlainText(s["actions"]["translate_custom"].get("prompt", ""))
+            self.custom_command_input.setPlainText(s["actions"]["custom"].get("prompt", ""))
             for action, field in self.shortcut_inputs.items():
                 field.setText(s.get("shortcuts", {}).get(action, ""))
             for action, cb in self.action_output_mode_inputs.items():
@@ -1306,7 +1458,11 @@ class FloatingBar(QMainWindow):
             sel = s.get("selected_custom_language", langs[0])
             self.custom_language_combo.blockSignals(True)
             self.custom_language_combo.clear()
-            self.custom_language_combo.addItems(langs)
+            self.custom_language_combo.setIconSize(QSize(28, 17))
+            for lang in langs:
+                code = LANGUAGE_FLAGS.get(lang, "")
+                icon = QIcon(_make_flag_pixmap(code, 28, 17)) if code else QIcon()
+                self.custom_language_combo.addItem(icon, lang)
             idx = self.custom_language_combo.findText(sel)
             self.custom_language_combo.setCurrentIndex(idx if idx >= 0 else 0)
             self.custom_language_combo.blockSignals(False)
@@ -1338,6 +1494,7 @@ class FloatingBar(QMainWindow):
             data["output_mode"] = self.mode_combo.currentData() or self.mode_combo.currentText()
             data["actions"]["fix"]["prompt"] = self.fix_prompt.toPlainText().strip()
             data["actions"]["summarize"]["prompt"] = self.summary_prompt.toPlainText().strip()
+            data["actions"]["custom"]["prompt"] = self.custom_command_input.toPlainText().strip()
             translate_prompt = self.translate_prompt.toPlainText().strip()
             for key in ["translate_ar", "translate_en", "translate_es", "translate_fr",
                         "translate_de", "translate_custom"]:
@@ -1648,13 +1805,21 @@ class FloatingBar(QMainWindow):
         schedule the action in the background."""
         try:
             source_app = self.selection.snapshot_source_app()
-            self.run_action(action, source_app=source_app)
+            # For the 'custom' action triggered via hotkey, read the saved
+            # custom prompt from settings (editable in the Prompts tab).
+            custom_instruction = ""
+            if action == "custom":
+                custom_instruction = self.settings.get("actions", {}).get("custom", {}).get("prompt", "").strip()
+                if not custom_instruction:
+                    self._notify("⚠  Set a Custom Command prompt in the Prompts tab first")
+                    return
+            self.run_action(action, source_app=source_app, custom_instruction=custom_instruction)
         except Exception:
             logger.exception("_on_hotkey_main failed")
 
     # ── Action execution ─────────────────────────────────────────────────────
 
-    def _run_action_from_button(self, action: str) -> None:
+    def _run_action_from_button(self, action: str, custom_instruction: str = "") -> None:
         """Wrapper for button-click connections.
 
         Snapshots the source window *on the main thread right now* — before the
@@ -1664,20 +1829,20 @@ class FloatingBar(QMainWindow):
         """
         try:
             source_app = self.selection.snapshot_source_app()
-            self.run_action(action, source_app=source_app)
+            self.run_action(action, source_app=source_app, custom_instruction=custom_instruction)
         except Exception:
             logger.exception("_run_action_from_button failed")
 
-    def run_action(self, action: str, source_app: str = "") -> None:
+    def run_action(self, action: str, source_app: str = "", custom_instruction: str = "") -> None:
         try:
             self.status_label.setText(f"⟳  Running {action}…")
             # Clear preview so streaming output is visible immediately
             self.output_preview.setPlainText("")
-            self.executor.submit(self._run_action_sync, action, source_app)
+            self.executor.submit(self._run_action_sync, action, source_app, custom_instruction)
         except Exception:
             logger.exception("Failed scheduling action")
 
-    def _run_action_sync(self, action: str, source_app: str = "") -> None:
+    def _run_action_sync(self, action: str, source_app: str = "", custom_instruction: str = "") -> None:
         try:
             text = self.selection.get_selected_text(source_app=source_app).strip()
             if not text:
@@ -1685,7 +1850,7 @@ class FloatingBar(QMainWindow):
                 return
 
             settings = self.settings_manager.get()
-            prompt = self.ops.build_prompt(action, text, settings)
+            prompt = self.ops.build_prompt(action, text, settings, custom_instruction=custom_instruction)
 
             def _on_chunk(chunk: str) -> None:
                 self._stream_preview_signal.emit(chunk)
